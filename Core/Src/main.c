@@ -100,12 +100,17 @@ uint8_t flag_lora ,
 		flag_sensor_imu ,
 		flag_sensor_barometre,
 		flag_counter,
+		flag_median,
 		flag_new_imu_data,
-		flag_new_barometer_data,
-		flag_median;
+		flag_new_barometre_data,
+		flag_adc,
+		flag_adc_cnt ,
+		flag_rampa_altitude,
+		flag_flash,
+		flag_flash_200ms,
+		flag_kontrol_5x;
 
-const uint8_t EGU_durum_sorgusu[5]={0x54,0x52,0x35,0x0D,0x0A};
-const uint8_t EGU_motor_atesleme[5]={0x54,0x52,0x32,0x0D,0x0A};
+
 
 
 float real_pitch, real_roll , toplam_pitch,toplam_roll , toplam_accX , toplam_accY , toplam_accZ, toplam_gX,toplam_gY,toplam_gZ ,rampa_accel,
@@ -125,9 +130,9 @@ float gyroX_LP_prev = 0.0f, gyroY_LP_prev = 0.0f, gyroZ_LP_prev = 0.0f , filtere
 
 
 float pressure , temperature , humidity , altitude, altitude_kalman ,altitude_max, prev_alt , speed, speed_max, offset_altitude;
+float adc, adc_pil_val;
 
-
-int time;
+int time,timer;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -151,8 +156,9 @@ void user_delay_ms(uint32_t period);
 void imu_filter_calculate();
 void union_converter();
 
-
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc);
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 
 int8_t user_i2c_read(uint8_t id, uint8_t reg_addr, uint8_t *data, uint16_t len);
 int8_t user_i2c_write(uint8_t id, uint8_t reg_addr, uint8_t *data, uint16_t len);
@@ -160,7 +166,7 @@ int8_t E220_read_register(uint8_t reg);
 int8_t E220_write_register(uint8_t reg,uint8_t parameter);
 
 float BME280_Get_Altitude(void);
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -171,6 +177,14 @@ typedef union{
   unsigned char array[4];
 }float2unit8;
 float2unit8 conv;
+
+
+enum ZORLU2024
+{
+	RAMPA,UCUS,BURNOUT,AYIR,AYRILDI_MI,AYRILDI,AYRILMADI,FINISH
+};
+enum ZORLU2024 BOOSTER;
+
 
 lwgps_t gps;
 
@@ -301,6 +315,8 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim3);
   HAL_TIM_Base_Start_IT(&htim4);
 
+  HAL_ADC_Start_IT(&hadc1);
+
   HAL_UART_Receive_IT(&huart2, &rx_data_gps, 1);
 
   /* USER CODE END 2 */
@@ -312,7 +328,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
+/*************************************************************************************/
 	  if(flag_sensor_imu ==1)
 	  {
 
@@ -340,7 +356,7 @@ int main(void)
 		 	      flag_sensor_imu = 0;
 
 	  }
-
+/*************************************************************************************/
 	  if(flag_sensor_barometre == 1){
 
 	 		  prev_alt = altitude;
@@ -356,11 +372,12 @@ int main(void)
 	 			 // speed_time = (HAL_GetTick()-speed_time_prev)/1000.0f;
 	 			  speed = (altitude - prev_alt) * 3.33;
 	 			 // speed_time_prev = speed_time;
+	 			 flag_new_barometre_data=1;
 	 		  }
 	 		  flag_sensor_barometre =0;
 	 	  }
 
-
+/*************************************************************************************/
 	  if((gps.seconds %4) ==0 && flag_lora ==1)
 	  {
 		  time = HAL_GetTick();
@@ -374,12 +391,113 @@ int main(void)
 	  }
 
 
+/*************************************************************************************/
+
+	  if(altitude>altitude_max) altitude_max = altitude;
+
+	 	  if(speed>speed_max) speed_max = speed;
+
+	 	  if( Lsm_Sensor.Accel_X> x_max) x_max =  Lsm_Sensor.Accel_X;
+
+	 	  if(flag_adc >=20 && flag_adc_cnt ==1)
+	 	  {
+	 		  if(adc > 2476) adc = 2234;
+	 		  if(adc < 1755) adc = 1755;
+	 		  // 6V = 1755 adc val 1,41V
+	 		  // 8.4V = 2476 adc val 1,99V 0,58V
+	 		 adc_pil_val=(float)( ( ( (adc/4095)*3.3)-1.41) / (1.99-1.41) ) *100 ; // pil conv
+	 		 // adc_pil_val = (adc-1755)/(2746-1755)*100;
+	 		 flag_adc_cnt =0;
+	 		 flag_adc=0;
+	 	  }
+
+	      if(altitude_kalman > 100 ) flag_rampa_altitude =1;
+
+/*************************************************************************************/
 
 
+	  switch(BOOSTER){
 
+		  case RAMPA:
+		   	  if(rampa_accel >10 && flag_new_imu_data ==1)
+			  {
+				  flag_new_imu_data =0;
+				  flag_kontrol_5x++;
+			  }
 
+			  if(flag_kontrol_5x >=5)
+			  {
+				  flag_kontrol_5x =0;
+				  BOOSTER=UCUS;
+			  }
 
+			  break;
 
+		  case UCUS:
+			    timer=HAL_GetTick();
+			  	BOOSTER=BURNOUT;
+			   break;
+
+		  case BURNOUT:
+
+			  if( ((HAL_GetTick()-timer)>=4500 && flag_rampa_altitude ==1) || ((HAL_GetTick()-timer)==6500) )
+			  {
+				  flag_kontrol_5x++;
+			  }
+			  if(flag_kontrol_5x >=5)
+			  {
+				  flag_kontrol_5x=0;
+
+				  BOOSTER=AYIR;
+			  }
+			   break;
+
+		  case AYIR:
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, SET);
+			  BOOSTER=AYRILDI_MI;
+			   break;
+
+		  case AYRILDI_MI:
+
+			   break;
+
+		  case AYRILDI:
+			  if(altitude < altitude_max  && flag_new_barometre_data ==1)
+			  {
+				  flag_new_barometre_data =0;
+				  flag_kontrol_5x++;
+			  }
+			  if(flag_kontrol_5x >=10)
+			  {
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, SET);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, RESET);
+				flag_kontrol_5x=0;
+				BOOSTER=FINISH;
+			  }
+
+			   break;
+
+		  case AYRILMADI:
+			  if(altitude <= 500  && flag_new_barometre_data ==1)
+			  {
+				  flag_new_barometre_data =0;
+				  flag_kontrol_5x++;
+			  }
+			  if(flag_kontrol_5x >=5)
+			  {
+				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, SET);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, RESET);
+				flag_kontrol_5x=0;
+				BOOSTER=FINISH;
+			  }
+
+			   break;
+
+		  case FINISH:
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, RESET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, RESET);
+				   break;
+	  }
 
 
   }
@@ -456,7 +574,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
@@ -916,7 +1034,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	if(htim==&htim4)// megü timer
 	{
 		flag_megu=1;
-
+		flag_adc++;
+		flag_flash_200ms=1;
 	}
 
 }

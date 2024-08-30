@@ -133,6 +133,7 @@ float pressure , temperature , humidity , altitude, altitude_kalman ,altitude_ma
 float adc, adc_pil_val;
 
 int time,timer;
+uint8_t battery;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -317,8 +318,33 @@ int main(void)
 
   HAL_ADC_Start_IT(&hadc1);
 
-  HAL_UART_Receive_IT(&huart2, &rx_data_gps, 1);
+  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+  HAL_Delay(1000);
+  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+      HAL_Delay(1000);
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+      HAL_Delay(1000);
+      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
 
+        HAL_Delay(1000);
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+
+          HAL_Delay(1000);
+
+          HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+            HAL_Delay(1000);
+
+            HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+              HAL_Delay(1000);
+              HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+                HAL_Delay(1000);
+                HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+                  HAL_Delay(1000);
+                  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_4);
+                    HAL_Delay(1000);
+                    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, SET);
+                    HAL_Delay(100);
+                    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, RESET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -407,8 +433,10 @@ int main(void)
 	 		  // 8.4V = 2476 adc val 1,99V 0,58V
 	 		 adc_pil_val=(float)( ( ( (adc/4095)*3.3)-1.41) / (1.99-1.41) ) *100 ; // pil conv
 	 		 // adc_pil_val = (adc-1755)/(2746-1755)*100;
+	 		 battery = adc_pil_val;
 	 		 flag_adc_cnt =0;
 	 		 flag_adc=0;
+	 		 HAL_ADC_Start_IT(&hadc1);
 	 	  }
 
 	      if(altitude_kalman > 100 ) flag_rampa_altitude =1;
@@ -425,7 +453,7 @@ int main(void)
 				  flag_kontrol_5x++;
 			  }
 
-			  if(flag_kontrol_5x >=5)
+			  if(flag_kontrol_5x >=3)
 			  {
 				  flag_kontrol_5x =0;
 				  BOOSTER=UCUS;
@@ -454,10 +482,21 @@ int main(void)
 
 		  case AYIR:
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, SET);
-			  BOOSTER=AYRILDI_MI;
+			  BOOSTER=AYRILDI;
+			  timer = HAL_GetTick();
 			   break;
 
 		  case AYRILDI_MI:
+			  if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == 0 && HAL_GetTick()-timer >=1000)
+			  {
+				  BOOSTER=AYRILDI;
+
+			  }
+			  else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == 1 &&  HAL_GetTick()-timer >=4000)
+			  {
+				  BOOSTER=AYRILMADI;
+			  }
+
 
 			   break;
 
@@ -1070,6 +1109,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+	if(hadc->Instance == ADC1 )
+	{
+		adc= HAL_ADC_GetValue(&hadc1);
+		flag_adc_cnt = 1;
+	}
+}
+
 int8_t E220_write_register(uint8_t reg,uint8_t parameter)
 {
 
@@ -1198,6 +1247,7 @@ void user_delay_ms(uint32_t period)
 
 void union_converter(void)
 {
+	  Lora_Tx_Buffer[4]= gps.sats_in_view;
 	 float2unit8 f2u8_gpsalt;
     f2u8_gpsalt.fVal=gps.altitude;
 		 for(uint8_t i=0;i<4;i++)
@@ -1279,6 +1329,8 @@ void union_converter(void)
 		 Lora_Tx_Buffer[70] = f2u8_altitude.array[1];
 		 Lora_Tx_Buffer[71] = f2u8_altitude.array[2];
 		 Lora_Tx_Buffer[72] = f2u8_altitude.array[3];
+
+		 Lora_Tx_Buffer[49] = battery;
 
 
 }
